@@ -1,14 +1,28 @@
 import Foundation
 
-/// In-memory store of detected codes. Nothing is ever written to disk or logged
-/// (privacy invariant): entries live only in memory with staged TTLs — unused
-/// codes expire, used codes drop out of the active list quickly, and a short
-/// history is kept for the menu. Thread-safe (lock-guarded); callbacks fire for
-/// UI refresh (`onChange`) and new detections (`onNewCode`).
-public final class CodeStore: @unchecked Sendable {
+/// What the store needs to know about a detection: which message it came from
+/// (the de-dupe key) and when that message arrived (the TTL clock).
+public protocol StoredDetection: Sendable {
+    var account: String { get }
+    var messageID: String { get }
+    var receivedAt: Date { get }
+}
+
+extension DetectedCode: StoredDetection {}
+extension DetectedLink: StoredDetection {}
+
+public typealias CodeStore = DetectionStore<DetectedCode>
+public typealias LinkStore = DetectionStore<DetectedLink>
+
+/// In-memory store of detections (codes or links). Nothing is ever written to
+/// disk or logged (privacy invariant): entries live only in memory with staged
+/// TTLs — unused items expire, used items drop out of the active list quickly,
+/// and a short history is kept for the menu. Thread-safe (lock-guarded);
+/// callbacks fire for UI refresh (`onChange`) and new detections (`onNewItem`).
+public final class DetectionStore<Item: StoredDetection>: @unchecked Sendable {
 
     private struct Entry {
-        var code: DetectedCode
+        var code: Item
         var usedAt: Date?
         var historyAt: Date?
     }
@@ -22,7 +36,7 @@ public final class CodeStore: @unchecked Sendable {
     private let dateProvider: () -> Date
 
     public var onChange: (() -> Void)?
-    public var onNewCode: ((DetectedCode) -> Void)?
+    public var onNewItem: ((Item) -> Void)?
 
     public init(
         ttl: TimeInterval = 7200,
@@ -38,10 +52,10 @@ public final class CodeStore: @unchecked Sendable {
         self.dateProvider = dateProvider
     }
 
-    /// Insert a freshly detected code. Ignored if older than the launch floor
-    /// (`notBefore`). De-dupes by (account, messageID); `onNewCode` fires only
+    /// Insert a freshly detected item. Ignored if older than the launch floor
+    /// (`notBefore`). De-dupes by (account, messageID); `onNewItem` fires only
     /// for genuinely new codes, `onChange` always.
-    public func insert(_ code: DetectedCode) {
+    public func insert(_ code: Item) {
         guard code.receivedAt >= notBefore else { return }
         lock.lock()
         let existed = entries.contains { $0.code.account == code.account && $0.code.messageID == code.messageID }
@@ -49,7 +63,7 @@ public final class CodeStore: @unchecked Sendable {
         entries.append(Entry(code: code, usedAt: nil, historyAt: nil))
         pruneLocked()
         lock.unlock()
-        if !existed { onNewCode?(code) }
+        if !existed { onNewItem?(code) }
         onChange?()
     }
 
@@ -66,7 +80,7 @@ public final class CodeStore: @unchecked Sendable {
     }
 
     /// Currently surfaced codes (not yet aged into history), newest first.
-    public func active() -> [DetectedCode] {
+    public func active() -> [Item] {
         lock.lock(); pruneLocked()
         let result = entries.filter { $0.historyAt == nil }.sorted { $0.code.receivedAt > $1.code.receivedAt }.map { $0.code }
         lock.unlock()
@@ -74,7 +88,7 @@ public final class CodeStore: @unchecked Sendable {
     }
 
     /// Recently-seen codes kept for the History submenu, newest first.
-    public func history() -> [DetectedCode] {
+    public func history() -> [Item] {
         lock.lock(); pruneLocked()
         let result = entries.filter { $0.historyAt != nil }.sorted { ($0.historyAt ?? .distantPast) > ($1.historyAt ?? .distantPast) }.map { $0.code }
         lock.unlock()
@@ -82,10 +96,10 @@ public final class CodeStore: @unchecked Sendable {
     }
 
     /// Alias for `active()` — the count shown in the menu-bar badge.
-    public func fresh() -> [DetectedCode] { active() }
+    public func fresh() -> [Item] { active() }
 
     /// The most recent active code (what the global hotkey fills).
-    public func latest() -> DetectedCode? { active().first }
+    public func latest() -> Item? { active().first }
 
     public func clear() {
         lock.lock(); entries.removeAll(); lock.unlock()

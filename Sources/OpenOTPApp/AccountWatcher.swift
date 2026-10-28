@@ -4,14 +4,16 @@ import OpenOTPCore
 actor AccountWatcher {
     private let source: MailSource
     private let store: CodeStore
+    private let linkStore: LinkStore
     private let pollInterval: TimeInterval
     private let onStatus: @Sendable (AccountStatus) -> Void
     private var task: Task<Void, Never>?
 
-    init(source: MailSource, store: CodeStore, pollInterval: TimeInterval = 2,
+    init(source: MailSource, store: CodeStore, linkStore: LinkStore, pollInterval: TimeInterval = 2,
          onStatus: @escaping @Sendable (AccountStatus) -> Void = { _ in }) {
         self.source = source
         self.store = store
+        self.linkStore = linkStore
         self.pollInterval = pollInterval
         self.onStatus = onStatus
     }
@@ -31,8 +33,13 @@ actor AccountWatcher {
             let started = Date()
             do {
                 for message in try await source.poll() {
+                    // Codes first: when one email carries both, the app sees the
+                    // code before the link and leads with the code.
                     if let detected = OTPv2.extract(from: message) {
                         store.insert(detected)
+                    }
+                    if Prefs.linksEnabled, let link = LinkDetector.extract(from: message) {
+                        linkStore.insert(link)
                     }
                 }
                 onStatus(.ok)

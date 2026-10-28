@@ -72,3 +72,50 @@ public struct DetectedCode: Sendable, Equatable {
         self.evidenceTrace = evidenceTrace
     }
 }
+
+/// A verification / sign-in / magic link found in an email. Same adversarial
+/// contract as `DetectedCode`: never open it without an explicit user action,
+/// always show `host` and `sender` alongside it, and give `isUnverified` links
+/// a distinct treatment. The URL usually carries a live auth token, so it is
+/// never logged or persisted.
+public struct DetectedLink: Sendable, Equatable {
+    public let url: URL
+    public let confidence: Double
+    public let account: String
+    public let sender: String
+    public let subject: String
+    public let messageID: String
+    public let receivedAt: Date
+    /// Whether the link's site is the sender's own domain. Lookalike or
+    /// redirect hosts (including legitimate click-trackers) read as unverified.
+    public let hostMatchesSender: Bool
+    /// Every signal that fired for this detection, so every decision is traceable.
+    public let evidenceTrace: [String]
+
+    public var host: String { url.host ?? url.absoluteString }
+    public var isUnverified: Bool {
+        confidence < DetectedCode.unverifiedThreshold || !hostMatchesSender
+    }
+
+    public init(
+        url: URL,
+        confidence: Double,
+        account: String,
+        sender: String,
+        subject: String,
+        messageID: String,
+        receivedAt: Date,
+        hostMatchesSender: Bool,
+        evidenceTrace: [String] = []
+    ) {
+        self.url = url
+        self.confidence = confidence
+        self.account = account
+        self.sender = sender
+        self.subject = subject
+        self.messageID = messageID
+        self.receivedAt = receivedAt
+        self.hostMatchesSender = hostMatchesSender
+        self.evidenceTrace = evidenceTrace
+    }
+}

@@ -1,11 +1,11 @@
 #!/bin/sh
 # OpenOTP installer — fetches the latest release DMG and installs to /Applications.
-# Usage: curl -fsSL https://openotp.app/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/Manan-Santoki/openotp-plus/main/docs/install.sh | sh
 # curl-downloaded files carry no quarantine attribute, so the app opens without
 # Gatekeeper prompts. The script needs no sudo (falls back to ~/Applications).
 set -eu
 
-REPO="jeninh/openotp"
+REPO="Manan-Santoki/openotp-plus"
 APP="OpenOTP"
 
 [ "$(uname -s)" = "Darwin" ] || { echo "OpenOTP is a macOS app; this installer only runs on macOS." >&2; exit 1; }

@@ -9,10 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboarding: OnboardingWindowController?
     private var settingsWindow: SettingsWindowController?
     let codeStore = CodeStore(ttl: 7200, notBefore: Date())
+    let linkStore = LinkStore(ttl: 7200, notBefore: Date())
     private var accountManager: AccountManager!
     private let filler = Filler()
     private let hotKey = HotKey()
-    private let pill = FillPill()
+    private let suggester = CodeSuggester()
+    private let linkPrompt = LinkPrompt()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single-instance guard: if another copy is already running (e.g. a
@@ -43,11 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKey.register(keyCode: Prefs.hotKeyCode, modifiers: Prefs.hotKeyModifiers) { [weak self] in self?.fillLatest() }
         if !Prefs.hotkeyEnabled { hotKey.unregister() }
 
-        accountManager = AccountManager(store: codeStore)
+        accountManager = AccountManager(store: codeStore, linkStore: linkStore)
         accountManager.onStatusChange = { [weak self] _, _ in
             self?.statusController.refreshNow()
         }
-        statusController = StatusItemController(codeStore: codeStore, accountManager: accountManager)
+        statusController = StatusItemController(codeStore: codeStore, linkStore: linkStore, accountManager: accountManager)
         statusController.onSetup = { [weak self] in self?.showOnboarding() }
         statusController.onAddAccount = { [weak self] in self?.showOnboarding() }
         statusController.onPreferences = { [weak self] in self?.showSettings() }
@@ -55,16 +57,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         LoginItem.setEnabled(Prefs.launchAtLogin)
 
-        pill.onFill = { [weak self] code in
+        suggester.onFill = { [weak self] code in
             guard let self else { return }
             if self.filler.fill(code.code) {
                 self.codeStore.markUsed(account: code.account, messageID: code.messageID)
             }
+            self.suggester.withdraw()
         }
 
-        codeStore.onNewCode = { [weak self] code in
+        codeStore.onNewItem = { [weak self] code in
             DispatchQueue.main.async {
-                self?.maybeShowPill(for: code)
+                self?.suggester.offer(code)
+            }
+        }
+
+        linkPrompt.onOpen = { [weak self] link in self?.openLink(link) }
+        statusController.onOpenLink = { [weak self] link in self?.openLink(link) }
+        linkStore.onNewItem = { [weak self] link in
+            DispatchQueue.main.async {
+                guard let self, Prefs.pillEnabled else { return }
+                // An email with a code leads with the code; its link stays in the menu.
+                let hasCode = self.codeStore.active().contains {
+                    $0.account == link.account && $0.messageID == link.messageID
+                }
+                if !hasCode { self.linkPrompt.offer(link) }
             }
         }
 
@@ -100,12 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    private func maybeShowPill(for code: DetectedCode) {
-        guard Prefs.pillEnabled, Accessibility.isTrusted else { return }
-        let field = FocusedField.current()
-        pill.present(code, near: field.isEditable ? field.cocoaFrame : nil)
-    }
-
     /// Apply a hotkey change and warn if the combo can't be registered (already
     /// taken by another app). Keeps the shortcut reliable for everyone.
     private func applyHotkey(code: UInt32, modifiers: UInt32, enabled: Bool) {
@@ -118,13 +128,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Open a detected link in the default browser — only ever from an explicit
+    /// click (the detector proposes, the human disposes).
+    private func openLink(_ link: DetectedLink) {
+        linkPrompt.withdraw()
+        NSWorkspace.shared.open(link.url)
+        linkStore.markUsed(account: link.account, messageID: link.messageID)
+    }
+
     private func fillLatest() {
         guard Prefs.hotkeyEnabled else { return }
         guard Accessibility.isTrusted else { Accessibility.presentOnboarding(); return }
         guard let code = codeStore.latest() else { NSSound.beep(); return }
         if filler.fill(code.code) {
             codeStore.markUsed(account: code.account, messageID: code.messageID)
-            pill.dismiss()
+            suggester.withdraw()
         }
     }
 

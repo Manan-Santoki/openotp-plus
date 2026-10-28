@@ -5,6 +5,7 @@ import Carbon.HIToolbox
 @MainActor
 final class SettingsModel: ObservableObject {
     @Published var pillEnabled = Prefs.pillEnabled
+    @Published var linksEnabled = Prefs.linksEnabled
     @Published var hotkeyEnabled = Prefs.hotkeyEnabled
     @Published var menuBarVisible = Prefs.menuBarVisible
     @Published var hideFromCapture = Prefs.hideFromCapture
@@ -100,6 +101,13 @@ struct SettingsView: View {
                        title: "Floating pill", subtitle: "Show a floating fill button when a code arrives") {
                 Toggle("", isOn: $model.pillEnabled).labelsHidden()
                     .onChange(of: model.pillEnabled) { v in Prefs.pillEnabled = v }
+            }
+            Divider()
+            SettingRow(icon: "email-fill",
+                       title: "Verification links",
+                       subtitle: "Also catch sign-in, magic and confirm-email links, and offer to open them") {
+                Toggle("", isOn: $model.linksEnabled).labelsHidden()
+                    .onChange(of: model.linksEnabled) { v in Prefs.linksEnabled = v }
             }
             Divider()
             SettingRow(icon: "private-outline",

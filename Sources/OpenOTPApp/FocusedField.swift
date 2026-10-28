@@ -6,6 +6,9 @@ enum FocusedField {
     struct Info {
         let isEditable: Bool
         let cocoaFrame: CGRect?
+        var element: AXUIElement? = nil
+        /// True when the field holds no text (or its value can't be read).
+        var isEmpty: Bool = true
     }
 
     private static let editableRoles: Set<String> = [
@@ -16,6 +19,9 @@ enum FocusedField {
 
     static func current() -> Info {
         let system = AXUIElementCreateSystemWide()
+        // This is polled while a code is on offer; never let a hung app stall
+        // the main thread for the default 6 s.
+        AXUIElementSetMessagingTimeout(system, 0.25)
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
               let focusedElement = focused else {
@@ -31,7 +37,14 @@ enum FocusedField {
             editable = settable.boolValue
         }
 
-        return Info(isEditable: editable, cocoaFrame: frame(of: element))
+        var isEmpty = true
+        var value: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+           let text = value as? String {
+            isEmpty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        return Info(isEditable: editable, cocoaFrame: frame(of: element), element: element, isEmpty: isEmpty)
     }
 
     private static func stringAttr(_ element: AXUIElement, _ attr: String) -> String? {

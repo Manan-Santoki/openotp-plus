@@ -1,126 +1,171 @@
 import AppKit
 import OpenOTPCore
 
+/// What a pill row shows and does: "Fill code 123456 / From GitHub", or
+/// "Open sign-in link / github.com · from GitHub".
+struct Suggestion {
+    /// Identity for `isShowing` — the source message.
+    let id: String
+    let title: String
+    let subtitle: String
+    let symbol: String
+    /// Distinct, non-accent treatment (see the detectors' adversarial contract).
+    let unverified: Bool
+    let accessibilityLabel: String
+    let action: () -> Void
+}
+
+/// A one-row AutoFill suggestion styled after macOS's own "Fill code … From
+/// Messages" popup: a menu-material card hugging the focused field (or the
+/// screen corner), holding a single selected row. Click the row to act. When it
+/// shows and hides is up to its owner (`CodeSuggester`, `LinkPrompt`); this
+/// class only draws and places it.
 @MainActor
 final class FillPill {
 
-    var onFill: ((DetectedCode) -> Void)?
-
     private var panel: NSPanel?
-    private var dismissTimer: Timer?
-    private var current: DetectedCode?
+    private var current: Suggestion?
+    private var anchor: CGRect?
 
-    private let width: CGFloat = 300
-    private let height: CGFloat = 56
+    private let inset: CGFloat = 5
+    private let rowHeight: CGFloat = 42
+    private let cornerRadius: CGFloat = 9
 
-    func present(_ code: DetectedCode, near anchor: CGRect?) {
+    func present(_ suggestion: Suggestion, near anchor: CGRect?) {
         dismiss()
-        current = code
+        current = suggestion
 
+        let content = buildContent(suggestion)
+        let size = content.frame.size
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false
         )
         panel.isFloatingPanel = true
-        panel.level = .floating
+        panel.level = .popUpMenu
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         // Screen-capture privacy: exclude the pill (which shows the raw code)
         // from all screen recording/sharing/screenshots. It stays fully visible
         // to the person at the Mac, but is a blank hole to any capture.
         panel.sharingType = Prefs.hideFromCapture ? .none : .readWrite
 
-        panel.contentView = buildContent(code: code)
-        position(panel, near: anchor)
-        panel.alphaValue = 1
+        panel.contentView = content
+        position(panel, size: size, near: anchor)
+        panel.alphaValue = 0
         panel.orderFrontRegardless()
-        panel.alphaValue = 0.85
+        panel.invalidateShadow()
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.14
+            ctx.duration = 0.12
             panel.animator().alphaValue = 1
         }
         self.panel = panel
+        self.anchor = anchor
+    }
 
-        dismissTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.dismiss() }
-        }
+    /// Whether the suggestion with this id is the one on screen right now.
+    func isShowing(_ id: String) -> Bool {
+        current?.id == id
+    }
+
+    /// Follow the field when it moves (scrolling, window drags).
+    func move(near anchor: CGRect) {
+        guard let panel, anchor != self.anchor else { return }
+        position(panel, size: panel.frame.size, near: anchor)
+        self.anchor = anchor
     }
 
     func dismiss() {
-        dismissTimer?.invalidate(); dismissTimer = nil
         panel?.orderOut(nil)
         panel = nil
         current = nil
+        anchor = nil
     }
 
-    /// Spell a code out character-by-character so VoiceOver reads "4 8 3 9 2 0"
-    /// rather than "four hundred eighty-three thousand…".
-    private func spelledOut(_ code: String) -> String {
-        code.map(String.init).joined(separator: " ")
-    }
+    private func buildContent(_ suggestion: Suggestion) -> NSView {
+        let unverified = suggestion.unverified
+        let title = suggestion.title
+        let subtitle = suggestion.subtitle
 
-    private func buildContent(code: DetectedCode) -> NSView {
-        let container = PillContainer(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        container.setAccessibilityElement(true)
-        container.setAccessibilityRole(.group)
-        container.setAccessibilityLabel("OpenOTP suggested verification code \(spelledOut(code.code)) from \(code.sender)")
+        let titleFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let subtitleFont = NSFont.systemFont(ofSize: 11)
+        let textWidth = min(340, ceil(max(
+            (title as NSString).size(withAttributes: [.font: titleFont]).width,
+            (subtitle as NSString).size(withAttributes: [.font: subtitleFont]).width
+        )))
+        let iconSide: CGFloat = 26
+        let rowWidth = 8 + iconSide + 8 + textWidth + 12
+        let size = NSSize(width: rowWidth + inset * 2, height: rowHeight + inset * 2)
 
-        let chip = NSView(frame: NSRect(x: 12, y: (height - 34) / 2, width: 34, height: 34))
-        chip.wantsLayer = true
-        chip.layer?.cornerRadius = 8
-        chip.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
-        if let glyph = IconSet.emailCheck(size: 22, color: .labelColor) {
+        let container = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        container.material = .menu
+        container.blendingMode = .behindWindow
+        container.state = .active
+        container.maskImage = Self.roundedMask(radius: cornerRadius)
+
+        let row = SuggestionRow(frame: NSRect(x: inset, y: inset, width: rowWidth, height: rowHeight))
+        row.tint = unverified ? .systemOrange : .selectedContentBackgroundColor
+        row.onClick = suggestion.action
+        row.setAccessibilityLabel(suggestion.accessibilityLabel)
+        container.addSubview(row)
+
+        let symbol = unverified ? "exclamationmark.triangle.fill" : suggestion.symbol
+        let config = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
+        if let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) {
             let iv = NSImageView(image: glyph)
-            iv.frame = NSRect(x: 6, y: 6, width: 22, height: 22)
-            chip.addSubview(iv)
+            iv.contentTintColor = .white
+            iv.frame = NSRect(x: 8, y: (rowHeight - iconSide) / 2, width: iconSide, height: iconSide)
+            row.addSubview(iv)
         }
-        container.addSubview(chip)
 
-        let codeLabel = NSTextField(labelWithString: code.code)
-        codeLabel.font = .monospacedSystemFont(ofSize: 19, weight: .semibold)
-        codeLabel.frame = NSRect(x: 56, y: height/2 - 2, width: 130, height: 24)
-        codeLabel.setAccessibilityLabel("Code \(spelledOut(code.code))")
-        container.addSubview(codeLabel)
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = titleFont
+        titleLabel.textColor = .white
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.frame = NSRect(x: 8 + iconSide + 8, y: rowHeight / 2 - 1, width: textWidth, height: 17)
+        row.addSubview(titleLabel)
 
-        let caption = NSTextField(labelWithString: "Verification code")
-        caption.font = .systemFont(ofSize: 10)
-        caption.textColor = .secondaryLabelColor
-        caption.frame = NSRect(x: 56, y: height/2 - 20, width: 150, height: 14)
-        container.addSubview(caption)
-
-        let fill = NSButton(title: "Fill", target: self, action: #selector(fillClicked))
-        fill.bezelStyle = .rounded
-        fill.keyEquivalent = "\r"
-        fill.controlSize = .large
-        fill.frame = NSRect(x: width - 108, y: (height - 30) / 2, width: 60, height: 30)
-        fill.setAccessibilityLabel("Fill code into the focused field")
-        container.addSubview(fill)
-
-        let close = NSButton(title: "", target: self, action: #selector(closeClicked))
-        close.bezelStyle = .circular
-        close.isBordered = false
-        if let x = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Dismiss") {
-            let iv = x
-            iv.isTemplate = true
-            close.image = iv
-        } else { close.title = "×" }
-        close.contentTintColor = .tertiaryLabelColor
-        close.frame = NSRect(x: width - 34, y: (height - 22) / 2, width: 22, height: 22)
-        close.setAccessibilityLabel("Dismiss")
-        container.addSubview(close)
+        let subtitleLabel = NSTextField(labelWithString: subtitle)
+        subtitleLabel.font = subtitleFont
+        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.85)
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.frame = NSRect(x: 8 + iconSide + 8, y: rowHeight / 2 - 16, width: textWidth, height: 14)
+        row.addSubview(subtitleLabel)
 
         return container
     }
 
-    private func position(_ panel: NSPanel, near anchor: CGRect?) {
-        let size = NSSize(width: width, height: height)
+    /// Stretchable rounded-rect mask, so the window shadow follows the corners.
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
+
+    /// Sit just under the field, left-aligned with it, like the system
+    /// suggestion; flip above it when there's no room below.
+    private func position(_ panel: NSPanel, size: NSSize, near anchor: CGRect?) {
+        let gap: CGFloat = 4
         let origin: NSPoint
-        if let a = anchor, a.width > 0 {
-            origin = NSPoint(x: a.minX, y: a.minY - size.height - 8)
+        if let a = anchor, a.width > 0,
+           let screen = NSScreen.screens.first(where: { $0.frame.intersects(a) }) ?? NSScreen.main {
+            let f = screen.visibleFrame
+            var y = a.minY - size.height - gap
+            if y < f.minY { y = a.maxY + gap }
+            let x = min(max(a.minX, f.minX + 8), f.maxX - size.width - 8)
+            origin = NSPoint(x: x, y: min(y, f.maxY - size.height))
         } else if let screen = NSScreen.main {
             let f = screen.visibleFrame
             origin = NSPoint(x: f.maxX - size.width - 20, y: f.maxY - size.height - 20)
@@ -130,39 +175,57 @@ final class FillPill {
         panel.setFrameOrigin(origin)
     }
 
-    @objc private func fillClicked() {
-        guard let code = current else { return }
-        onFill?(code)
-        dismiss()
-    }
-
-    @objc private func closeClicked() { dismiss() }
 }
 
-private final class PillContainer: NSView {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        wantsLayer = true
-        layer?.cornerRadius = 14
-        layer?.masksToBounds = true
+/// The single highlighted suggestion row. Clicks land without activating
+/// OpenOTP, so focus stays in the field being filled.
+private final class SuggestionRow: NSView {
+    var onClick: (() -> Void)?
+    var tint: NSColor = .selectedContentBackgroundColor
+    private var pressed = false { didSet { needsDisplay = true } }
 
-        if subviews.first(where: { $0 is NSVisualEffectView }) == nil {
-            let effect = NSVisualEffectView(frame: bounds)
-            effect.autoresizingMask = [.width, .height]
-            effect.material = .hudWindow
-            effect.blendingMode = .behindWindow
-            effect.state = .active
-            effect.wantsLayer = true
-            effect.layer?.cornerRadius = 14
-            effect.layer?.masksToBounds = true
-            addSubview(effect, positioned: .below, relativeTo: nil)
-        }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
     }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 14, yRadius: 14)
-        NSColor.separatorColor.withAlphaComponent(0.5).setStroke()
-        path.stroke()
+        let color = pressed ? (tint.shadow(withLevel: 0.15) ?? tint) : tint
+        color.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
     }
+
+    override func mouseDown(with event: NSEvent) { pressed = true }
+
+    override func mouseUp(with event: NSEvent) {
+        pressed = false
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
+}
+
+/// Display name from a "Name <addr>" sender, falling back to the raw sender.
+func displayName(ofSender sender: String) -> String {
+    if let lt = sender.firstIndex(of: "<") {
+        let name = sender[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: " \""))
+        if !name.isEmpty { return name }
+    }
+    return sender.trimmingCharacters(in: .whitespaces)
+}
+
+extension DetectedCode {
+    var senderName: String { displayName(ofSender: sender) }
+}
+
+extension DetectedLink {
+    var senderName: String { displayName(ofSender: sender) }
 }

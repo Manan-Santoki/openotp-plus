@@ -9,6 +9,12 @@ enum Prefs {
         set { d.set(newValue, forKey: "pillEnabled") }
     }
 
+    /// Also look for verification / sign-in / magic links, not just codes.
+    static var linksEnabled: Bool {
+        get { d.object(forKey: "linksEnabled") as? Bool ?? true }
+        set { d.set(newValue, forKey: "linksEnabled") }
+    }
+
     static var hotkeyEnabled: Bool {
         get { d.object(forKey: "hotkeyEnabled") as? Bool ?? true }
         set { d.set(newValue, forKey: "hotkeyEnabled") }

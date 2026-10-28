@@ -5,6 +5,7 @@ import OpenOTPCore
 final class StatusItemController: NSObject, NSMenuDelegate {
 
     private let codeStore: CodeStore
+    private let linkStore: LinkStore
     private let accountManager: AccountManager
     private var statusItem: NSStatusItem!
     private var isMenuOpen = false
@@ -13,9 +14,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onSetup: (() -> Void)?
     var onAddAccount: (() -> Void)?
     var onPreferences: (() -> Void)?
+    var onOpenLink: ((DetectedLink) -> Void)?
 
-    init(codeStore: CodeStore, accountManager: AccountManager) {
+    init(codeStore: CodeStore, linkStore: LinkStore, accountManager: AccountManager) {
         self.codeStore = codeStore
+        self.linkStore = linkStore
         self.accountManager = accountManager
         super.init()
     }
@@ -39,6 +42,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         codeStore.onChange = { [weak self] in
             DispatchQueue.main.async { self?.refresh() }
         }
+        linkStore.onChange = { [weak self] in
+            DispatchQueue.main.async { self?.refresh() }
+        }
         ticker = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refresh() }
         }
@@ -54,7 +60,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func refreshNow() { refresh() }
 
     private func refresh() {
-        let count = codeStore.fresh().count
+        let count = codeStore.fresh().count + linkStore.fresh().count
         let needsAttention = accountManager.accounts.contains { accountManager.status($0).needsUserAction }
         if let button = statusItem.button {
             if needsAttention {
@@ -62,7 +68,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 button.toolTip = "An account needs attention — open the menu"
             } else {
                 button.title = count > 0 ? " \(count)" : ""
-                button.toolTip = count > 0 ? "\(count) recent code\(count == 1 ? "" : "s")" : "OpenOTP"
+                button.toolTip = count > 0 ? "\(count) recent code\(count == 1 ? "" : "s") or link\(count == 1 ? "" : "s")" : "OpenOTP"
             }
         }
         if isMenuOpen, let menu = statusItem.menu {
@@ -79,11 +85,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         let codes = codeStore.active()
-        if codes.isEmpty {
+        let links = linkStore.active()
+        if codes.isEmpty && links.isEmpty {
             let empty = NSMenuItem(title: "No recent codes", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
-        } else {
+        } else if !codes.isEmpty {
             let header = NSMenuItem(title: "Recent codes", action: nil, keyEquivalent: "")
             header.isEnabled = false
             menu.addItem(header)
@@ -97,12 +104,30 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(hint)
         }
 
+        if !links.isEmpty {
+            if !codes.isEmpty { menu.addItem(.separator()) }
+            let header = NSMenuItem(title: "Recent links", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for link in links {
+                linkItems(link).forEach(menu.addItem)
+            }
+            let hint = NSMenuItem(title: "Click to open · hold ⌥ to copy", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            menu.addItem(hint)
+        }
+
         let historyCodes = codeStore.history()
-        if !historyCodes.isEmpty {
+        let historyLinks = linkStore.history()
+        if !historyCodes.isEmpty || !historyLinks.isEmpty {
             let historyItem = NSMenuItem(title: "History (last 12h)", action: nil, keyEquivalent: "")
             let sub = NSMenu()
             for code in historyCodes {
                 sub.addItem(codeItem(code))
+            }
+            if !historyCodes.isEmpty && !historyLinks.isEmpty { sub.addItem(.separator()) }
+            for link in historyLinks {
+                linkItems(link).forEach(sub.addItem)
             }
             historyItem.submenu = sub
             menu.addItem(historyItem)
@@ -172,13 +197,54 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // mask) — the code stays readable on the capture-excluded pill, and
         // clicking still copies it.
         let title = Prefs.hideFromCapture
-            ? "Copy code  ·  \(shortSender(code.sender))"
-            : "\(code.code)  —  \(shortSender(code.sender))"
+            ? "Copy code  ·  \(code.senderName)"
+            : "\(code.code)  —  \(code.senderName)"
         let item = NSMenuItem(title: title, action: #selector(copyCode(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = code
         item.toolTip = "\(code.subject) · \(code.account)"
         return item
+    }
+
+    /// "Open host — sender", plus its ⌥ alternate "Copy link to host — sender".
+    private func linkItems(_ link: DetectedLink) -> [NSMenuItem] {
+        // Only the host is shown: the full URL carries a live auth token.
+        let mark = link.isUnverified ? "⚠️ " : ""
+        let item = NSMenuItem(title: "\(mark)Open \(link.host)  —  \(link.senderName)",
+                              action: #selector(openLink(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = link
+        item.toolTip = "\(link.subject) · \(link.account)"
+        if let img = NSImage(systemSymbolName: "link", accessibilityDescription: nil) {
+            item.image = img
+        }
+
+        let copy = NSMenuItem(title: "\(mark)Copy link to \(link.host)  —  \(link.senderName)",
+                              action: #selector(copyLink(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.representedObject = link
+        copy.isAlternate = true
+        copy.keyEquivalentModifierMask = .option
+        return [item, copy]
+    }
+
+    @objc private func openLink(_ sender: NSMenuItem) {
+        guard let link = sender.representedObject as? DetectedLink else { return }
+        onOpenLink?(link)
+    }
+
+    @objc private func copyLink(_ sender: NSMenuItem) {
+        guard let link = sender.representedObject as? DetectedLink else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(link.url.absoluteString, forType: .string)
+        linkStore.markUsed(account: link.account, messageID: link.messageID)
+        let value = link.url.absoluteString
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) {
+            if NSPasteboard.general.string(forType: .string) == value {
+                NSPasteboard.general.clearContents()
+            }
+        }
     }
 
     @objc private func copyCode(_ sender: NSMenuItem) {
@@ -193,13 +259,5 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 NSPasteboard.general.clearContents()
             }
         }
-    }
-
-    private func shortSender(_ sender: String) -> String {
-        if let lt = sender.firstIndex(of: "<") {
-            let name = sender[..<lt].trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty { return name }
-        }
-        return sender.trimmingCharacters(in: .whitespaces)
     }
 }

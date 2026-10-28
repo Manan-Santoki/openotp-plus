@@ -16,13 +16,15 @@ cd "$ROOT"
 # Release builds are universal (arm64 + x86_64) so Intel Macs can run the app;
 # debug stays native-only for faster iteration. CLT-only SwiftPM can't do
 # multi-arch in one invocation (--arch needs Xcode's xcbuild), so build each
-# slice separately and lipo them together at the copy step below.
+# slice separately and lipo them together at the copy step below. Each slice
+# gets its own scratch path: newer SwiftPM writes every triple to the same
+# Products/Release folder, so a shared one leaves two copies of the last slice.
 if [ "$CONFIG" = "release" ]; then
   echo "==> swift build -c release (arm64 + x86_64)"
-  swift build -c release --triple arm64-apple-macosx
-  swift build -c release --triple x86_64-apple-macosx
-  BIN_ARM64="$(swift build -c release --triple arm64-apple-macosx --show-bin-path)"
-  BIN_X86="$(swift build -c release --triple x86_64-apple-macosx --show-bin-path)"
+  swift build -c release --triple arm64-apple-macosx --scratch-path .build/arm64
+  swift build -c release --triple x86_64-apple-macosx --scratch-path .build/x86_64
+  BIN_ARM64="$(swift build -c release --triple arm64-apple-macosx --scratch-path .build/arm64 --show-bin-path)"
+  BIN_X86="$(swift build -c release --triple x86_64-apple-macosx --scratch-path .build/x86_64 --show-bin-path)"
 else
   echo "==> swift build -c $CONFIG"
   swift build -c "$CONFIG"
@@ -56,8 +58,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>$APP_NAME</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.1</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleShortVersionString</key><string>0.2.0</string>
+    <key>CFBundleVersion</key><string>3</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHumanReadableCopyright</key><string>OpenOTP</string>
 </dict>

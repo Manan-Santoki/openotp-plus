@@ -5,6 +5,7 @@ import OpenOTPCore
 final class AccountManager {
 
     private let store: CodeStore
+    private let linkStore: LinkStore
     private var watchers: [String: AccountWatcher] = [:]
 
     private let accountsKey = "accounts"
@@ -15,8 +16,9 @@ final class AccountManager {
     /// uses it to refresh the menu bar and (once) notify on a new error.
     var onStatusChange: ((_ email: String, _ status: AccountStatus) -> Void)?
 
-    init(store: CodeStore) {
+    init(store: CodeStore, linkStore: LinkStore) {
         self.store = store
+        self.linkStore = linkStore
     }
 
     func status(_ email: String) -> AccountStatus { statuses[email] ?? .ok }
@@ -71,7 +73,7 @@ final class AccountManager {
         // already-connected account doesn't leave an orphaned watcher polling
         // (a duplicate server connection that never stops).
         if let existing = watchers[email] { Task { await existing.stop() } }
-        let watcher = AccountWatcher(source: source, store: store) { [weak self] status in
+        let watcher = AccountWatcher(source: source, store: store, linkStore: linkStore) { [weak self] status in
             // Hop to the main actor; only propagate real changes.
             Task { @MainActor [weak self] in self?.updateStatus(email, status) }
         }

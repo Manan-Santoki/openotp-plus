@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jeninh/OpenOTP/releases/latest">Download</a> ·
+  <a href="https://github.com/Manan-Santoki/openotp-plus/releases/latest">Download</a> ·
   <a href="#building-from-source">Build from source</a> <br>
   <sub>macOS 13+</sub>
 </p>
@@ -19,19 +19,22 @@
   <img src="docs/demo.gif" alt="OpenOTP demo" width="640">
 </p>
 
+> **openotp-plus** is a fork of [jeninh/OpenOTP](https://github.com/jeninh/OpenOTP) that adds a native macOS-style AutoFill popup and verification-link detection. See the [changelog](CHANGELOG.md).
+
 ## What it does
 
 You paste email verification codes dozens of times a week. OpenOTP is like the way an iPhone surfaces SMS codes above the keyboard, but for the one-time passcodes that land in your email. It watches your inbox, and spots any incoming codes. It presents it to you in three formats:
 
 - **Global shortcut** (default `⌃⌥V`, customizable) types the latest code into the focused field
-- **Floating pill** next to the field you're filling
-- **Menu-bar list** of recent codes, one click to copy, with a 12-hour history
+- **AutoFill popup** under the field you're filling, styled like macOS's own "Fill code" suggestion. It stays on offer for 5 minutes, follows you between empty text fields, and hides while you type
+- **Verification links** — sign-in, magic, confirm-email and password-reset links are detected too, with a one-click "Open" popup
+- **Menu-bar list** of recent codes and links, one click to copy or open, with a 12-hour history
 
 Heads up: this is a simple personal project I built for myself and decided to share, not a polished product. It works well for me, but expect some issues :)
 
 ## Getting started
 
-1. Grab the app from [Releases](https://github.com/jeninh/OpenOTP/releases/latest), or build from source below
+1. Grab the app from [Releases](https://github.com/Manan-Santoki/openotp-plus/releases/latest), or build from source below
 2. Follow the setup wizard. Connect with an [app password](https://support.google.com/accounts/answer/185833) for your email account
 3. When a code arrives, press `⌃⌥V`, click the pill, or copy it from the menu bar
 
@@ -55,8 +58,8 @@ One limit: when you actually *fill* a code, it lands in a real text field on scr
 ## Building from source
 
 ```sh
-git clone https://github.com/jeninh/OpenOTP
-cd OpenOTP
+git clone https://github.com/Manan-Santoki/openotp-plus
+cd openotp-plus
 Scripts/bundle.sh release      # builds + packages build/OpenOTP.app
 open build/OpenOTP.app
 ```
